@@ -119,6 +119,7 @@ class PPO:
         return t_optim
 
     def train(self):
+        os.makedirs("model_save", exist_ok=True)
         while self.trn_info.n_timesteps < self.config.max_steps:
 
             # store transitions
