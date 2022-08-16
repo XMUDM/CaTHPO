@@ -2,7 +2,7 @@ CaTHPO is a code-aware cross-program transfer hyperparameter tuning framework.
 
 # CaTHPO
 
-## Reauirements
+## Requirement
 
 - OS: Ubuntu 18.04
 
@@ -16,7 +16,7 @@ CaTHPO is a code-aware cross-program transfer hyperparameter tuning framework.
 
 ## Code-aware Program Representation
 
-1. PreProcess for program source code
+1. Preprocess for program source code
 
    ```
    python ./pretrain/process_code_ast.py
