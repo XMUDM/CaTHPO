@@ -97,7 +97,7 @@ class NeuralAF(nn.Module):
             std = vec_states[:, :, self.std_idx]
             h = self.env.tgp_model.get_safe_threshold()
             for i in range(logits.shape[-1]):
-                if  mean[0, i] - std[0, i] < h:
+                if  mean[0, i] - 1.96*std[0, i] < h:
                     logits[0, i] /= 100
 
         # value network
