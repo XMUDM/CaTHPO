@@ -1,0 +1,170 @@
+import torch
+import cornac
+from recommenders.datasets.python_splitters import python_random_split
+from recommenders.evaluation.python_evaluation import map_at_k, ndcg_at_k, precision_at_k, recall_at_k
+from recommenders.models.cornac.cornac_utils import predict_ranking
+from recommenders.utils.timer import Timer
+from recommenders.utils.constants import SEED
+
+TOP_K = 10
+ENCODER_DIMS = [100]
+ACT_FUNC = "tanh"
+LIKELIHOOD = "pois"
+NUM_EPOCHS = 50
+
+def BiVAE_application(data, ld, lr, bs):
+    train, test = python_random_split(data, 0.75)
+    train_set = cornac.data.Dataset.from_uir(train.itertuples(index=False), seed=SEED)
+    bivae = cornac.models.BiVAECF(
+        k=ld,
+        encoder_structure=ENCODER_DIMS,
+        act_fn=ACT_FUNC,
+        likelihood=LIKELIHOOD,
+        n_epochs=NUM_EPOCHS,
+        batch_size=bs,
+        learning_rate=lr,
+        seed=SEED,
+        use_gpu=torch.cuda.is_available(),
+        verbose=True
+    )
+
+    with Timer() as t:
+        bivae.fit(train_set)
+
+    with Timer() as t:
+        all_predictions = predict_ranking(bivae, train, usercol='userID', itemcol='itemID', remove_seen=True)
+
+    eval_ndcg = ndcg_at_k(test, all_predictions, col_prediction='prediction', k=TOP_K)
+
+    return eval_ndcg
+
+class BiVAECF(Recommender):
+
+    def __init__(
+        self,
+        name="BiVAECF",
+        k=10,
+        encoder_structure=[20],
+        act_fn="tanh",
+        likelihood="pois",
+        n_epochs=100,
+        batch_size=100,
+        learning_rate=0.001,
+        beta_kl=1.0,
+        cap_priors={"user": False, "item": False},
+        trainable=True,
+        verbose=False,
+        seed=None,
+        use_gpu=True,
+    ):
+        Recommender.__init__(self, name=name, trainable=trainable, verbose=verbose)
+        self.k = k
+        self.encoder_structure = encoder_structure
+        self.act_fn = act_fn
+        self.likelihood = likelihood
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        self.learning_rate = learning_rate
+        self.beta_kl = beta_kl
+        self.cap_priors = cap_priors
+        self.seed = seed
+        self.use_gpu = use_gpu
+
+    def fit(self, train_set, val_set=None):
+
+        Recommender.fit(self, train_set, val_set)
+
+        import torch
+        from .bivae import BiVAE, learn
+
+        self.device = (
+            torch.device("cuda:0")
+            if (self.use_gpu and torch.cuda.is_available())
+            else torch.device("cpu")
+        )
+
+        if self.trainable:
+            feature_dim = {"user": None, "item": None}
+            if self.cap_priors.get("user", False):
+                if train_set.user_feature is None:
+                    raise ValueError(
+                        "CAP priors for users is set to True but no user features are provided"
+                    )
+                else:
+                    feature_dim["user"] = train_set.user_feature.feature_dim
+
+            if self.cap_priors.get("item", False):
+                if train_set.item_feature is None:
+                    raise ValueError(
+                        "CAP priors for items is set to True but no item features are provided"
+                    )
+                else:
+                    feature_dim["item"] = train_set.item_feature.feature_dim
+
+            if self.seed is not None:
+                torch.manual_seed(self.seed)
+                torch.cuda.manual_seed(self.seed)
+
+            if not hasattr(self, "bivaecf"):
+                num_items = train_set.matrix.shape[1]
+                num_users = train_set.matrix.shape[0]
+                self.bivae = BiVAE(
+                    k=self.k,
+                    user_encoder_structure=[num_items] + self.encoder_structure,
+                    item_encoder_structure=[num_users] + self.encoder_structure,
+                    act_fn=self.act_fn,
+                    likelihood=self.likelihood,
+                    cap_priors=self.cap_priors,
+                    feature_dim=feature_dim,
+                    batch_size=self.batch_size,
+                ).to(self.device)
+
+            learn(
+                self.bivae,
+                self.train_set,
+                n_epochs=self.n_epochs,
+                batch_size=self.batch_size,
+                learn_rate=self.learning_rate,
+                beta_kl=self.beta_kl,
+                verbose=self.verbose,
+                device=self.device,
+            )
+
+        elif self.verbose:
+            print("%s is trained already (trainable = False)" % (self.name))
+
+        return self
+
+    def score(self, user_idx, item_idx=None):
+
+        if item_idx is None:
+            if self.train_set.is_unk_user(user_idx):
+                raise ScoreException(
+                    "Can't make score prediction for (user_id=%d)" % user_idx
+                )
+
+            theta_u = self.bivae.mu_theta[user_idx].view(1, -1)
+            beta = self.bivae.mu_beta
+            known_item_scores = (
+                self.bivae.decode_user(theta_u, beta).cpu().numpy().ravel()
+            )
+
+            return known_item_scores
+        else:
+            if self.train_set.is_unk_user(user_idx) or self.train_set.is_unk_item(
+                item_idx
+            ):
+                raise ScoreException(
+                    "Can't make score prediction for (user_id=%d, item_id=%d)"
+                    % (user_idx, item_idx)
+                )
+
+            theta_u = self.bivae.mu_theta[user_idx].view(1, -1)
+            beta_i = self.bivae.mu_beta[item_idx].view(1, -1)
+            pred = self.bivae.decode_user(theta_u, beta_i).cpu().numpy().ravel()
+
+            pred = scale(
+                pred, self.train_set.min_rating, self.train_set.max_rating, 0.0, 1.0
+            )
+
+            return
