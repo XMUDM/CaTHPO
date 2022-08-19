@@ -27,7 +27,7 @@ def dfs(node, all_nodes):
 def build_vocab(vocab_path="vocab"):
     word_count = {}
     for w in workloads:
-        file = open("./pretrain/source_code/" + w)
+        file = open("./data/rs_code/" + w + '.py')
         code = file.read()
         words = []
         tree = parser.parse(bytes(code,'utf8'))
@@ -86,7 +86,7 @@ def process_code_ast():
     workload2astidx = {}
     workload2isType = {}
     for w in workloads:
-        file = open("./pretrain/source_code/" + w)
+        file = open("./data/rs_code/" + w + ".py")
         code = file.read()
         tree = parser.parse(bytes(code,'utf8'))
         all_nodes = []
@@ -114,5 +114,5 @@ def process_code_ast():
 if __name__ == '__main__':
   build_vocab()
   process_code_ast()
-  print('finish')
+  # print('finish')
 
